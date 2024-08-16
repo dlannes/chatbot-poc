@@ -1,6 +1,7 @@
-from models import SessionHistory, MetadataRequest, MessageMetadata, ReviewRequest
 from fastapi import APIRouter, HTTPException, Response
-import service
+
+from .models import SessionHistory, MetadataRequest, MessageMetadata, ReviewRequest
+from . import service
 
 router = APIRouter(prefix="message", tags=["Message History"])
 
@@ -19,7 +20,7 @@ async def get_last_message(session_id: str) -> int:
 @router.get("/get-session-history/{session_id}")
 async def get_history(session_id: str) -> SessionHistory:
     messages = await service.fetch_session_history(session_id)
-    return SessionHistory(id=session_id, messages=messages)
+    return SessionHistory(session_id=session_id, messages=messages)
 
 
 @router.post("/msg-references/")

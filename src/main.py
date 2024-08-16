@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from os import getcwd
 import warnings
 
-
 from .message_history.routes import router as message_router
 from .text_generation.routes import router as generation_router
 from .session.routes import router as session_router

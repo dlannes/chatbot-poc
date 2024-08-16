@@ -11,19 +11,15 @@ from openai import AsyncOpenAI
 from uuid import UUID
 import psycopg
 import json
-import os
 
 from ..message_history.models import Image, Message, MessageMetadata, OriginData
 from ..message_history.service import add_messages, update_messages
 from .models import QueryType, Embedding, SessionSummary
-from .prompt_templates import templates
 from ..session.models import Session
+from .. import env_variables as env
 
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-DATABASE = os.getenv("DATABASE_CONNECTION", "")
-VECTOR_DATABASE = os.getenv("VECTOR_DB_CONNECTION", "")
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+openai_client = AsyncOpenAI(api_key=env.OPENAI_API_KEY.get_secret_value())
 
 
 async def validate_collection(session_type: str, content_id: str) -> bool:
@@ -35,7 +31,9 @@ async def validate_collection(session_type: str, content_id: str) -> bool:
     is_valid = False
     collection = _format_collection_name(session_type, content_id)
 
-    async with await psycopg.AsyncConnection.connect(VECTOR_DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.VECTOR_DB_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, [collection])
             exists = await cursor.fetchone()
@@ -46,8 +44,12 @@ async def validate_collection(session_type: str, content_id: str) -> bool:
 
 
 async def classify_user_query(user_query: str) -> QueryType:
-    prompt_template = ChatPromptTemplate.from_template(templates["classify_query"])
-    model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-2024-08-06", temperature=0.5)  # type: ignore
+    prompt_template = ChatPromptTemplate.from_template(
+        env.prompt_templates["classify_query"]
+    )
+    model = ChatOpenAI(
+        api_key=env.OPENAI_API_KEY, model="gpt-4o-2024-08-06", temperature=0.5
+    )
     chain = (
         {"user_query": RunnablePassthrough()}
         | prompt_template
@@ -118,17 +120,17 @@ async def stream_response(
 
     if not update:
         await add_messages(session.id, user_query, output, references)
-    else:
+    elif ai_message_id:
         await update_messages(session.id, user_query, output, ai_message_id, references)
 
 
 async def _generate_response(
     user_query: str, embeddings: list[Embedding], previous_messages: str
 ) -> AsyncIterable[str]:
-    # TODO: tirar langchain daqui
-    prompt_template = ChatPromptTemplate.from_template(templates["chat"])
+
+    prompt_template = ChatPromptTemplate.from_template(env.prompt_templates["answer"])
     model = ChatOpenAI(
-        api_key=OPENAI_API_KEY,  # type: ignore
+        api_key=env.OPENAI_API_KEY,
         model="gpt-4o-2024-08-06",
         temperature=0.7,
         streaming=True,
@@ -160,11 +162,13 @@ async def _generate_response(
 async def generate_invalid_query_response(
     session_id: UUID, user_query: str
 ) -> AsyncIterable[str]:
-    prompt_template = ChatPromptTemplate.from_template(templates["invalid"])
+    prompt_template = ChatPromptTemplate.from_template(
+        env.prompt_templates["invalid_query"]
+    )
     chunks: list[str] = []
 
     model = ChatOpenAI(
-        api_key=OPENAI_API_KEY,  # type: ignore
+        api_key=env.OPENAI_API_KEY,
         model="gpt-4o-2024-08-06",
         temperature=0.5,
         streaming=True,
@@ -189,9 +193,9 @@ async def generate_invalid_query_response(
 
 async def generate_title(session_id: UUID, question: str) -> str:
     model = ChatOpenAI(
-        api_key=OPENAI_API_KEY, model="gpt-4o-2024-08-06", temperature=0.7  # type: ignore
+        api_key=env.OPENAI_API_KEY, model="gpt-4o-2024-08-06", temperature=0.7
     )
-    prompt_template = ChatPromptTemplate.from_template(templates["chat_title"])
+    prompt_template = ChatPromptTemplate.from_template(env.prompt_templates["title"])
 
     chain = (
         {
@@ -206,7 +210,9 @@ async def generate_title(session_id: UUID, question: str) -> str:
 
     title = ""
     query = "UPDATE sessions SET title = %s WHERE ID = %s RETURNING title;"
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, (generated_title, session_id))
             row = await cursor.fetchone()
@@ -219,10 +225,7 @@ async def generate_title(session_id: UUID, question: str) -> str:
 async def _get_session_context(
     session_summary: SessionSummary, messages: list[Message], n: int = 3
 ) -> tuple[str, list[UUID]]:
-    """Retorna tuple contendo prompt sobre as interações anteriores e uma lista contendo os ids dos embeddings utilizados.
-    O prompt consiste do resumo dos topicos abordados na sessão e as ultimas `n` interações entre o usuário e o assistente.\n
-    Valor padrão `n = 3`, aonde cada `n` é uma interação, que corresponde a 2 mensagens (pergunta do usuario + resposta da ia).
-    """
+
     n_msg = n * 2
 
     if len(messages) > n_msg:
@@ -234,9 +237,9 @@ async def _get_session_context(
 
     context = ""
     if session_summary.summary.strip() != "":
-        context += f"system: Estes foram os temas relevantes das interações recentes entre o usuário e o MEDRobot:\n"
+        context += f"system: Those are the relevant themes for the recent interactions between the User and MedicAssist:\n"
         context += f"{session_summary.summary}\n"
-        context += f"system: Seguem as ultimas mensagens das interações recentes entre o usuário (human) e o MEDRobot (ai).\n"
+        context += f"system: Those are the most recent messages between the User (human) and MedicAssist (ai).\n"
     context += _format_prompt_messages(messages)
 
     embedding_ids: list[UUID] = []
@@ -252,7 +255,6 @@ async def _get_session_context(
 async def _fetch_session_summary_data(
     session_id: UUID,
 ) -> tuple[SessionSummary, list[Message]]:
-    "Retorna o resumo da sessão e lista de mensagens a partir da ultima utilizada para gerar o resumo."
 
     session_summary_query = """
         SELECT session_id, last_message_id, summary
@@ -273,7 +275,9 @@ async def _fetch_session_summary_data(
     session_summary = SessionSummary(session_id=session_id)
     messages: list[Message] = []
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(SessionSummary)) as cursor:
             await cursor.execute(session_summary_query, [session_id])
             row = await cursor.fetchone()
@@ -298,10 +302,11 @@ async def _fetch_session_summary_data(
 async def _generate_session_summary(
     current_summary: str, messages: list[Message]
 ) -> str:
-    "Gerar resumo da sessão com base no resumo atual e as interações mais antigas, ainda não inclusas no resumo."
 
-    prompt_template = ChatPromptTemplate.from_template(templates["chat_summary"])
-    model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-2024-08-06", temperature=0.7)  # type: ignore
+    prompt_template = ChatPromptTemplate.from_template(env.prompt_templates["summary"])
+    model = ChatOpenAI(
+        api_key=env.OPENAI_API_KEY, model="gpt-4o-2024-08-06", temperature=0.7
+    )
     chain = (
         {
             "current_summary": RunnablePassthrough(),
@@ -331,7 +336,9 @@ async def _update_session_summary(session: SessionSummary) -> None:
             summary = EXCLUDED.summary;
     """
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(
                 query, (session.session_id, session.last_message_id, session.summary)
@@ -360,7 +367,7 @@ def _top_documents_for_output(embeddings: list[Embedding], output: str) -> dict:
             distinct_embeddings.add(x.id)
 
     store = SKLearnVectorStore.from_documents(
-        documents, OpenAIEmbeddings(api_key=OPENAI_API_KEY)  # type: ignore
+        documents, OpenAIEmbeddings(api_key=env.OPENAI_API_KEY)
     )
 
     documents_with_score = store.similarity_search_with_relevance_scores(
@@ -395,7 +402,6 @@ def _top_documents_for_output(embeddings: list[Embedding], output: str) -> dict:
 
 
 async def _fetch_embeddings(embedding_ids: list[UUID]) -> list[Embedding]:
-    "Retorna embeddings a partir dos IDs."
 
     query = """
         SELECT uuid AS id, document, cmetadata AS metadata
@@ -405,7 +411,9 @@ async def _fetch_embeddings(embedding_ids: list[UUID]) -> list[Embedding]:
 
     embeddings: list[Embedding] = []
 
-    async with await psycopg.AsyncConnection.connect(VECTOR_DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(Embedding)) as cursor:
             await cursor.execute(query, [embedding_ids])
             embeddings = await cursor.fetchall()
@@ -414,7 +422,7 @@ async def _fetch_embeddings(embedding_ids: list[UUID]) -> list[Embedding]:
 
 
 async def _search_embeddings(session: Session, user_query: str) -> list[Embedding]:
-    "Retorna embeddings encontrados a partir de busca por similaridade com o input do usuário `user_query`."
+    "Retrieve embeddings by similarity with the `user_query`."
 
     query = """
         WITH collection_ids AS (
@@ -440,7 +448,9 @@ async def _search_embeddings(session: Session, user_query: str) -> list[Embeddin
     embeddings: list[Embedding] = []
     collection_name = _format_collection_name(session.type, session.content_id)
 
-    async with await psycopg.AsyncConnection.connect(VECTOR_DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(Embedding)) as embed_cursor:
             await embed_cursor.execute(
                 query,
@@ -465,7 +475,6 @@ async def _search_embeddings(session: Session, user_query: str) -> list[Embeddin
 
 
 async def _generate_query_vector(search_input: str) -> list[float]:
-    "Gera vetor para o texto `search_input`, que será utilizado para busca por similaridade."
 
     embbeding_response = await openai_client.embeddings.create(
         input=search_input, model="text-embedding-ada-002"
@@ -478,7 +487,7 @@ def _format_prompt_messages(messages: list[Message]) -> str:
     return "\n".join([f"{m.role}: {m.text}" for m in messages])
 
 
-def _format_collection_name(session_type: str, content_id: str) -> str:
+def _format_collection_name(session_type: str | None, content_id: str | None) -> str:
     if session_type == "chat":
         return "default"
     else:

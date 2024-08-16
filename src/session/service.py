@@ -1,13 +1,11 @@
-from ..exceptions import DBEntityNotFoundException
 from psycopg.rows import class_row
-from .models import Session, Hint
-from os import getenv
 from uuid import UUID
 import psycopg
 import uuid
 
-
-DATABASE_CONN = getenv("DATABASE_CONN_STR", "")
+from ..exceptions import DBEntityNotFoundException
+from .. import env_variables as env
+from .models import Session, Hint
 
 
 async def begin_session(
@@ -15,7 +13,7 @@ async def begin_session(
 ) -> Session:
     session_id = None
     hints: list[Hint] = []
-    # TODO: FIx hints
+
     match session_type:
         case "chat":
             session_id = await _find_empty_chat_session(user_id)
@@ -28,7 +26,7 @@ async def begin_session(
     if not session_id:
         session_id = await _create_session(user_id, session_type, content_id)
 
-    return Session(session_id=session_id, hints=hints)
+    return Session(id=session_id, hints=hints)
 
 
 async def _create_session(
@@ -41,7 +39,9 @@ async def _create_session(
 
     session_id = uuid.uuid4()
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(
                 new_session_query, (session_id, user_id, session_type, content_id)
@@ -58,7 +58,9 @@ async def get_session(session_id: UUID) -> Session | None:
 
     session: Session | None = None
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(Session)) as cursor:
             await cursor.execute(query, [session_id])
             row = await cursor.fetchone()
@@ -73,7 +75,9 @@ async def validate_session(session_id: UUID) -> bool:
 
     is_valid = False
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, [session_id])
             row = await cursor.fetchone()
@@ -94,7 +98,9 @@ async def _find_user_collection_session(
 
     session_id: UUID | None = None
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, (user_id, session_type, content_id))
             row = await cursor.fetchone()
@@ -118,7 +124,9 @@ async def _find_empty_chat_session(user_id: int) -> UUID | None:
 
     session_id: UUID | None = None
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, [user_id])
             row = await cursor.fetchone()
@@ -142,7 +150,9 @@ async def fetch_user_sessions(user_id: int) -> list[Session]:
         ORDER BY created_at DESC;
     """
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(Session)) as cursor:
             await cursor.execute(query, [user_id])
             sessions = await cursor.fetchall()
@@ -153,7 +163,9 @@ async def fetch_user_sessions(user_id: int) -> list[Session]:
 async def delete_session(session_id: str) -> None:
     query = "UPDATE sessions SET deleted = TRUE WHERE id = %s;"
 
-    async with await psycopg.AsyncConnection.connect(DATABASE_CONN) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, [session_id])
             if cursor.rowcount == 0:

@@ -4,12 +4,9 @@ from starlette.requests import Request
 from psycopg import AsyncConnection
 from fastapi import HTTPException
 import traceback
-import os
 
 from .exceptions import DBEntityNotFoundException
-
-
-DATABASE = os.getenv("DATABASE_CONNECTION", "")
+from . import env_variables as env
 
 
 class DBEntityNotFoundException(Exception):
@@ -51,6 +48,8 @@ class ExceptionLoggingMiddleware(BaseHTTPMiddleware):
             VALUES (%s, %s, %s, %s)
         """
 
-        async with await AsyncConnection.connect(DATABASE) as conn:
+        async with await AsyncConnection.connect(
+            env.DATABASE_CONN.get_secret_value()
+        ) as conn:
             async with conn.cursor() as cur:
                 await cur.execute(query, (endpoint, ex_type, ex_message, stack_trace))

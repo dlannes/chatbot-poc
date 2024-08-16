@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Response
-from models import Session, UserSessions
+
 from ..text_generation.service import validate_collection
-import service
+from .models import Session, UserSessions
+from . import service
 
 
 router = APIRouter(prefix="session", tags=["Session"])
@@ -17,7 +18,7 @@ async def start_session(
             detail=f"`content_id` is required for sessions of the type `{session_type}`.",
         )
 
-    valid_collection = await validate_collection(session_type, content_id)
+    valid_collection = await validate_collection(session_type, str(content_id))
     if not valid_collection:
         raise HTTPException(
             404,

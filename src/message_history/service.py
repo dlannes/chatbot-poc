@@ -1,14 +1,12 @@
-from src.exceptions import *
-from models import *
-from psycopg.rows import class_row
 from langchain_community.chat_message_histories import postgres
 from langchain_core.messages import HumanMessage, AIMessage
+from psycopg.rows import class_row
+from uuid import UUID
 import psycopg
 import json
 
-from os import getenv
-
-DATABASE = getenv("DATABASE_CONNECTION", "")
+from .models import MessageMetadata, Message
+from .. import env_variables as env
 
 
 async def session_last_message_id(session_id: str) -> int | None:
@@ -25,7 +23,9 @@ async def session_last_message_id(session_id: str) -> int | None:
 
     id: int | None = None
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, [session_id])
             row = await cursor.fetchone()
@@ -41,7 +41,9 @@ async def validate_message(message_id: int, session_id: UUID) -> bool:
         "SELECT EXISTS(SELECT 1 FROM message_store WHERE id = %s AND session_id = %s)"
     )
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, (message_id, str(session_id)))
 
@@ -55,7 +57,9 @@ async def validate_message(message_id: int, session_id: UUID) -> bool:
 async def create_review(message_id: int, review: str):
     query = "INSERT INTO message_reviews (message_id, review) VALUES (%s, %s)"
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(query, (message_id, review))
             await connection.commit()
@@ -71,7 +75,9 @@ async def fetch_message_metadata(session_id: UUID, message_id: int) -> MessageMe
         WHERE session_id = %s AND id = %s;
     """
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(MessageMetadata)) as cursor:
             await cursor.execute(query, (str(session_id), message_id))
             row = await cursor.fetchone()
@@ -99,7 +105,9 @@ async def fetch_session_history(session_id: str) -> list[Message]:
         ORDER BY id ASC;
     """
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor(row_factory=class_row(Message)) as cursor:
             await cursor.execute(query, [session_id])
             rows = await cursor.fetchall()
@@ -113,7 +121,7 @@ async def add_messages(
     session_id: UUID, user_query: str, output: str, references: dict = {}
 ) -> None:
     message_store = postgres.PostgresChatMessageHistory(
-        connection_string=DATABASE,
+        connection_string=env.DATABASE_CONN.get_secret_value(),
         session_id=str(session_id),
     )
     messages = [
@@ -153,6 +161,8 @@ async def update_messages(
         WHERE session_id = %s AND id = %s;
     """
 
-    async with await psycopg.AsyncConnection.connect(DATABASE) as connection:
+    async with await psycopg.AsyncConnection.connect(
+        env.DATABASE_CONN.get_secret_value()
+    ) as connection:
         async with connection.cursor() as cursor:
             await cursor.executemany(query, messages)

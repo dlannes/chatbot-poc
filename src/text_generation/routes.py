@@ -1,8 +1,10 @@
 from fastapi.responses import StreamingResponse
 from fastapi import APIRouter, HTTPException
-from models import PromptRequest, QueryType
-import service
+
+
 from ..session.service import get_session, validate_session
+from .models import PromptRequest, QueryType
+from . import service
 
 router = APIRouter(prefix="generate", tags=["Text Generation"])
 
@@ -53,11 +55,6 @@ async def update_answer(data: PromptRequest) -> StreamingResponse:
 
 @router.post("/session-title/")
 async def generate_chat_title(data: PromptRequest) -> str:
-    if data.text.isspace() or not data.text:
-        raise HTTPException(
-            status_code=400, detail="The request field `text` is empty."
-        )
-
     valid_session = await validate_session(data.session_id)
     if not valid_session:
         raise HTTPException(status_code=400, detail="Invalid Session.")
