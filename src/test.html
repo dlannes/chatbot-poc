@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI assistant test</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .chat-container { max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; }
+    .message { margin: 10px 0; }
+    .user { color: green; }
+    .bot { color: blue; }
+  </style>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" integrity="sha384-wcIxkf4k558AjM3Yz3BBFQUbk/zgIYC2R0QpeeYb+TwlBVMrlgLqwRjRtGZiK7ww" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js" integrity="sha384-hIoBPJpTUs74ddyc4bFZSM1TVlQDA60VBbJS0oA934VSz82sBx1X7kSx2ATBDIyd" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="chat-container">
+    <h2>Chat with the assistant</h2>
+    <h5>Start a new session to begin!</h5>
+    <button id="start-session" onclick="startSession()">New Session</button>
+    <div id="chat-log"></div>
+    <textarea id="user-input" placeholder="Write your message to the assistant!" rows="4" cols="50"></textarea>
+    <br>
+    <button id="send-button" onclick="sendMessage()">Send</button>    
+  </div>
+  
+  <script>
+
+    const baseUrl = window.location.origin;
+    let sessionId = '';
+    let messages = [];
+    document.getElementById('send-button').disabled = true;
+
+    async function startSession() {
+      const response = await fetch(`${baseUrl}/session/start/0/chat`);
+      const data = await response.json();
+      sessionId = data.session_id;
+      messages = [];
+      renderChatLog();
+      document.getElementById('user-input').value = '';
+      document.getElementById('send-button').disabled = false;
+      alert('New session started!');
+    }
+
+    async function sendMessage() {
+      const userInput = document.getElementById('user-input').value;
+      if (!userInput.trim()) return;
+
+      document.getElementById('send-button').disabled = true;
+      messages.push({ role: 'user', text: userInput });
+      renderChatLog();
+      document.getElementById('user-input').value = '';
+      const botMessageIndex = messages.length;
+      messages.push({ role: 'bot', text: '' });
+
+      const response = await fetch(`${baseUrl}/generate/stream-answer/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ session_id: sessionId, text: userInput })
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let done = false;
+      let botResponse = '';
+
+      while (!done) {
+        const { value, done: chunkDone } = await reader.read();
+        done = chunkDone;
+        botResponse += decoder.decode(value, { stream: true });
+        messages[botMessageIndex].text = botResponse;
+        renderChatLog();
+      }
+
+      document.getElementById('send-button').disabled = false;
+    }
+
+    function renderChatLog() {
+      const chatLog = document.getElementById('chat-log');
+      chatLog.innerHTML = '';
+      messages.forEach(message => {
+        const messageElement = document.createElement('div');
+        messageElement.className = 'message ' + message.role;
+        let content = message.text.replace(/\\\[([\s\S]*?)\\\]|\\\(([\s\S]*?)\\\)/g, function(match, formulaDisplay, formulaInline) {
+          const formula = formulaDisplay || formulaInline;
+          try {
+            return katex.renderToString(formula.trim(), {
+              throwOnError: false,
+              displayMode: !!formulaDisplay
+            });
+          } catch (e) {
+            console.error('KaTeX rendering error:', e);
+            return match;
+          }
+        });
+
+        if (message.role === 'bot') {
+          const formattedText = marked.parse(content);
+          messageElement.innerHTML = `<b>AI:</b> ${formattedText}`;
+        } else {
+          messageElement.innerHTML = `<b>You:</b> ${content}`;
+        }
+        chatLog.appendChild(messageElement);
+      });
+    }
+  </script>
+</body>
+</html>
